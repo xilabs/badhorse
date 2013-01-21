@@ -6,25 +6,47 @@
 
 
 #include <iostream>
+#include <fstream>
 #include <stdlib.h>
 #include <math.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
+#include <json/json.h>
 
 using namespace cv;
 using namespace std;
 
+int blursize=5;			// Must be odd
+
 
 void find_squares(Mat& image, vector<vector<Point> >& squares);
+void find_plate(Mat& img, vector<vector<Point> >& squares);
 double angle( cv::Point pt1, cv::Point pt2, cv::Point pt0 );
 cv::Mat debugSquares( std::vector<std::vector<cv::Point> > squares, cv::Mat image );
 
 int main () {
 
+	// Get settings
+	Json::Value root;
+	Json::Reader reader;
+	ifstream config;
+	config.open("/var/www/badhorse/settings.json");
+	
+	if(!reader.parse(config,root)) {
+	
+		config.close();
+		cout << "Error reading settings.json: " << reader.getFormatedErrorMessages() << std::endl;
+		return -1;
+	
+	}
+	config.close();
+	double rotation=(double)root["input"].get("rotation",0).asInt();
+	double left=(double)root["input"]["crop_h"][(Json::Value::UInt)0].asInt()/100.0f;
+	double right=(double)root["input"]["crop_h"][(Json::Value::UInt)1].asInt()/100.0f;
 
 	// Load image
-	Mat image=imread("test.jpg", CV_LOAD_IMAGE_COLOR);
+	Mat image=imread("/var/www/badhorse/in.jpg", CV_LOAD_IMAGE_COLOR);
 	if(!image.data) {
 	
 		cout << "Error reading image" << std::endl;
@@ -32,18 +54,74 @@ int main () {
 	}
 	std::cout << "Loaded\n";
 	
+	// Crop source
+	Mat cropped=image(Rect(image.cols*left, 0, ((right-left)*image.cols),image.rows));
+	
+	
+	// Rotate source
+	Point2f center(cropped.cols/2.0f,cropped.rows/2.0f);
+	warpAffine(cropped, cropped, getRotationMatrix2D(center, rotation, 1.0), cropped.size());
+	
+	
+	
 	// Create a vector for the squares, and find the squares
 	std::cout << "Finding squares...\n";
 	vector<vector<Point> > squares;
-	find_squares(image, squares);
+	
+	// Intensity edge detection
+	Mat intensity(cropped);
+	cvtColor(cropped, intensity, CV_RGB2GRAY);
+	medianBlur(intensity,intensity,blursize);
+	Canny(intensity, intensity, 100, 300, 3);
+
+/*
+
+	// Grab the Hue channel, blur it, and perform Canny:
+	Mat hsv(cropped);
+	cvtColor(cropped, hsv, CV_BGR2HSV);
+	
+	Mat hue(cropped.rows, cropped.cols, CV_8UC1);
+	int from_to[]= { 0, 0 };
+	mixChannels(&hsv, 1, &hue, 1, from_to, 1);
+//	medianBlur(hue,hue,blursize*2+1);
+//	Canny(hue, hue, 200, 300, 3);
+	*/
+		
+	// Line detection
+	vector<Vec4i> lines;
+	HoughLinesP(intensity, lines, 1, 10*CV_PI/180, 10, 50, 5);		// Angle, thresh, min_len, max_gap
+	
+	// BGR output
+	//cvtColor(hue, hue, CV_GRAY2BGR);
+	
+	
+	for(size_t i=0; i<lines.size(); i++) {
+	
+		Vec4i l=lines[i];
+		line(cropped, Point(l[0],l[1]), Point(l[2],l[3]), Scalar(0,255,0), 3, CV_AA);
+	}
+
+
+//	imwrite("/var/www/badhorse/out.jpg",hue);
+	imwrite("/var/www/badhorse/out.jpg",cropped);
+
+	
+/*	find_squares(image, squares);
 	
 	// Draw on image
 	Mat output=debugSquares( squares, image );
 	
 	std::cout << "Writing image...\n";
-	imwrite("out.png",output);
-	
+	imwrite("out.jpg",output);
+*/	
 	return 0;
+
+}
+
+
+void find_plate(Mat& img, vector<vector<Point> >& squares) {
+
+	
 
 }
 
